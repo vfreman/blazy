@@ -39,6 +39,18 @@
             };
         }
 
+        var testScrollOnBody = function() {
+		    const node = document.createElement('div');
+		    node.style.width = '100vw';
+		    node.style.height = '201vh';
+		    document.body.appendChild(node);
+		    document.documentElement.scrollTop = 100;
+		    const scrollOnBody = document.documentElement.scrollTop === 0;
+		    document.body.removeChild(node);
+		    document.documentElement.scrollTop = 0;
+		    return scrollOnBody;
+	    };
+
         //options and helper vars
         var scope = this;
         var util = scope._util = {};
@@ -59,8 +71,11 @@
         scope.options.successClass = scope.options.successClass || 'b-loaded';
         scope.options.validateDelay = scope.options.validateDelay || 25;
         scope.options.saveViewportOffsetDelay = scope.options.saveViewportOffsetDelay || 50;
+        scope.options.initializeDelay = scope.options.initializeDelay || 25;
         scope.options.srcset = scope.options.srcset || 'data-srcset';
         scope.options.src = _source = scope.options.src || 'data-src';
+        scope.options.scrollContainer = scope.options.scrollContainer || null;
+        scope.options.scrollTopFix = null;
         _supportClosest = Element.prototype.closest;
         _isRetina = window.devicePixelRatio > 1;
         _viewport = {};
@@ -71,7 +86,7 @@
         /* public functions
          ************************************/
         scope.revalidate = function() {
-            initialize(scope);
+	        util.initializeT(scope);
         };
         scope.load = function(elements, force) {
             var opt = this.options;
@@ -93,18 +108,25 @@
             unbindEvent(window, 'scroll', util.validateT);
             unbindEvent(window, 'resize', util.validateT);
             unbindEvent(window, 'resize', util.saveViewportOffsetT);
+            unbindEvent(window, 'resize', util.cacheEltsBoundingRectT);
             util.count = 0;
             util.elements.length = 0;
             util.destroyed = true;
         };
 
         //throttle, ensures that we don't call the functions too often
+	    util.initializeT = throttle(function() {
+		    initialize(scope);
+	    }, scope.options.initializeDelay, scope);
         util.validateT = throttle(function() {
             validate(scope);
         }, scope.options.validateDelay, scope);
         util.saveViewportOffsetT = throttle(function() {
             saveViewportOffset(scope.options.offset);
         }, scope.options.saveViewportOffsetDelay, scope);
+	    util.cacheEltsBoundingRectT = throttle(function() {
+		    cacheEltsBoundingRect(scope);
+	    }, scope.options.saveViewportOffsetDelay, scope);
         saveViewportOffset(scope.options.offset);
 
         //handle multi-served image src (obsolete)
@@ -117,6 +139,8 @@
 
         // start lazy load
         setTimeout(function() {
+            if (scope.options.scrollContainer == null)
+	            scope.options.scrollContainer = testScrollOnBody() ? document.body : document.documentElement;
             initialize(scope);
         }); // "dom ready" fix
 
@@ -139,18 +163,21 @@
                 });
             }
             bindEvent(window, 'resize', util.saveViewportOffsetT);
+            bindEvent(window, 'resize', util.cacheEltsBoundingRectT);
             bindEvent(window, 'resize', util.validateT);
             bindEvent(window, 'scroll', util.validateT);
         }
         // And finally, we start to lazy load.
+	    cacheEltsBoundingRect(self);
         validate(self);
     }
 
     function validate(self) {
+        var scrollTop = self.options.scrollTopFix != null ? self.options.scrollTopFix : self.options.scrollContainer.scrollTop;
         var util = self._util;
         for (var i = 0; i < util.count; i++) {
             var element = util.elements[i];
-            if (elementInView(element, self.options) || hasClass(element, self.options.successClass)) {
+            if (elementInView(element, self.options, scrollTop) || hasClass(element, self.options.successClass)) {
                 self.load(element);
                 util.elements.splice(i, 1);
                 util.count--;
@@ -162,42 +189,68 @@
         }
     }
 
-    function elementInView(ele, options) {
-        var rect = ele.getBoundingClientRect();
+	function cacheEltsBoundingRect(self) {
+		var util = self._util;
+		var scrollTop = self.options.scrollContainer.scrollTop;
+		for (var i = 0; i < util.count; i++) {
+			var ele = util.elements[i];
+			ele.rect = getBoundingClientRect(ele, scrollTop);
+			if(self.options.container && _supportClosest){
+				// Is element inside a container?
+				var elementContainer = ele.closest(self.options.containerClass);
+				if(elementContainer)
+					ele.containerRect = getBoundingClientRect(elementContainer, scrollTop);
+			}
+		}
+	}
+
+	function getBoundingClientRect(ele, scrollTop)
+    {
+        if (scrollTop == null) scrollTop = 0;
+	    var rect = ele.getBoundingClientRect();
+	    return {
+            top: rect.top + scrollTop,
+            right: rect.right,
+            bottom: rect.bottom + scrollTop,
+            left: rect.left,
+        };
+    }
+
+    function elementInView(ele, options, scrollTop) {
+        if (scrollTop == null) scrollTop = 0;
 
         if(options.container && _supportClosest){
             // Is element inside a container?
             var elementContainer = ele.closest(options.containerClass);
             if(elementContainer){
-                var containerRect = elementContainer.getBoundingClientRect();
                 // Is container in view?
-                if(inView(containerRect, _viewport)){
-                    var top = containerRect.top - options.offset;
-                    var right = containerRect.right + options.offset;
-                    var bottom = containerRect.bottom + options.offset;
-                    var left = containerRect.left - options.offset;
+                if(inView(ele.containerRect, _viewport, scrollTop)){
+                    var top = ele.containerRect.top - options.offset;
+                    var right = ele.containerRect.right + options.offset;
+                    var bottom = ele.containerRect.bottom + options.offset;
+                    var left = ele.containerRect.left - options.offset;
                     var containerRectWithOffset = {
-                        top: top > _viewport.top ? top : _viewport.top,
+                        top: top - scrollTop > _viewport.top ? top - scrollTop : _viewport.top,
                         right: right < _viewport.right ? right : _viewport.right,
-                        bottom: bottom < _viewport.bottom ? bottom : _viewport.bottom,
+                        bottom: bottom - scrollTop < _viewport.bottom ? bottom - scrollTop : _viewport.bottom,
                         left: left > _viewport.left ? left : _viewport.left
                     };
                     // Is element in view of container?
-                    return inView(rect, containerRectWithOffset);
+                    return inView(ele.rect, containerRectWithOffset, scrollTop);
                 } else {
                     return false;
                 }
             }
-        }      
-        return inView(rect, _viewport);
+        }
+        return inView(ele.rect, _viewport, scrollTop);
     }
 
-    function inView(rect, viewport){
+    function inView(rect, viewport, scrollTop){
         // Intersection
         return rect.right >= viewport.left &&
-               rect.bottom >= viewport.top && 
-               rect.left <= viewport.right && 
-               rect.top <= viewport.bottom;
+               rect.bottom - scrollTop >= viewport.top &&
+               rect.left <= viewport.right &&
+               rect.top - scrollTop <= viewport.bottom;
     }
 
     function loadElement(ele, force, options) {
