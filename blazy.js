@@ -40,12 +40,12 @@
         }
 
         var testScrollOnBody = function() {
-		    const node = document.createElement('div');
+		    var node = document.createElement('div');
 		    node.style.width = '100vw';
 		    node.style.height = '201vh';
 		    document.body.appendChild(node);
 		    document.documentElement.scrollTop = 100;
-		    const scrollOnBody = document.documentElement.scrollTop === 0;
+		    var scrollOnBody = document.documentElement.scrollTop === 0;
 		    document.body.removeChild(node);
 		    document.documentElement.scrollTop = 0;
 		    return scrollOnBody;
